@@ -6,7 +6,8 @@
 
 var app = require('../app');
 var debug = require('debug')('nodeexpressvulny:server');
-var http = require('http');
+var https = require('https');
+var fs = require('fs');
 
 /**
  * Get port from environment and store in Express.
@@ -16,10 +17,45 @@ var port = normalizePort(process.env.PORT || '3000');
 app.set('port', port);
 
 /**
- * Create HTTP server.
+ * Create server with transport security.
+ *
+ * Security hardening:
+ * - Prefer HTTPS in production or when HTTPS_ENABLED=true
+ * - Load TLS key/cert from TLS_KEY_PATH and TLS_CERT_PATH
+ * - Fail fast in production if TLS material is missing to avoid plaintext transport
+ * - Allow HTTP fallback only for local development
  */
 
-var server = http.createServer(app);
+const useHttps = process.env.HTTPS_ENABLED === 'true' || process.env.NODE_ENV === 'production';
+let server;
+
+if (useHttps) {
+  const keyPath = process.env.TLS_KEY_PATH;
+  const certPath = process.env.TLS_CERT_PATH;
+
+  if (!keyPath || !certPath) {
+    console.error('[SECURITY] TLS is required but TLS_KEY_PATH or TLS_CERT_PATH is not set.');
+    console.error('Set TLS_KEY_PATH and TLS_CERT_PATH to valid file paths (PEM format).');
+    process.exit(1);
+  }
+
+  try {
+    const options = {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+      // Strong defaults can be tuned further (ciphers, minVersion)
+      minVersion: 'TLSv1.2'
+    };
+    server = https.createServer(options, app);
+  } catch (e) {
+    console.error('[SECURITY] Failed to load TLS key/cert:', e.message);
+    process.exit(1);
+  }
+} else {
+  console.warn('[SECURITY] HTTPS disabled. Starting HTTP server for local development only.');
+  var http = require('http');
+  server = http.createServer(app);
+}
 
 /**
  * Listen on provided port, on all network interfaces.
@@ -50,7 +86,7 @@ function normalizePort(val) {
 }
 
 /**
- * Event listener for HTTP server "error" event.
+ * Event listener for server "error" event.
  */
 
 function onError(error) {
@@ -78,7 +114,7 @@ function onError(error) {
 }
 
 /**
- * Event listener for HTTP server "listening" event.
+ * Event listener for server "listening" event.
  */
 
 function onListening() {
@@ -86,7 +122,7 @@ function onListening() {
   var bind = typeof addr === 'string'
     ? 'pipe ' + addr
     : 'port ' + addr.port;
-  debug('Listening on ' + bind);
+  debug('Listening on ' + bind + (useHttps ? ' (HTTPS)' : ' (HTTP)'));
 }
 
 // Borrowed from https://medium.com/@becintec/building-graceful-node-applications-in-docker-4d2cd4d5d392
